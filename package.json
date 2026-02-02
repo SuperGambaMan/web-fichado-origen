@@ -1,26 +1,33 @@
 {
-  "name": "web-fichado-origen",
-  "version": "0.1.0",
+  "name": "fichajes-monorepo",
+  "version": "1.0.0",
+  "description": "Sistema de control de fichajes - Monorepo",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "dev": "docker-compose up -d",
+    "dev:logs": "docker-compose logs -f",
+    "dev:stop": "docker-compose down",
+    "dev:rebuild": "docker-compose down && docker-compose up -d --build",
+    "prod": "docker-compose -f docker-compose.prod.yml up -d",
+    "prod:stop": "docker-compose -f docker-compose.prod.yml down",
+    "backend:install": "cd backend && npm install",
+    "frontend:install": "cd frontend && npm install",
+    "install:all": "npm run backend:install && npm run frontend:install",
+    "backend:dev": "cd backend && npm run start:dev",
+    "frontend:dev": "cd frontend && npm run dev",
+    "backend:build": "cd backend && npm run build",
+    "frontend:build": "cd frontend && npm run build",
+    "lint": "npm run lint --prefix backend && npm run lint --prefix frontend",
+    "clean": "docker-compose down -v && docker system prune -f",
+    "seed": "docker-compose exec backend npm run seed"
   },
-  "dependencies": {
-    "next": "16.1.6",
-    "react": "19.2.3",
-    "react-dom": "19.2.3"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.1.6",
-    "tailwindcss": "^4",
-    "typescript": "^5"
-  }
+  "keywords": [
+    "fichajes",
+    "time-tracking",
+    "nestjs",
+    "nextjs",
+    "docker"
+  ],
+  "author": "",
+  "license": "MIT"
 }

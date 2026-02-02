@@ -1,0 +1,130 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # PostgreSQL Database
+  # ============================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: fichajes-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fichajes_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fichajes_password}
+      POSTGRES_DB: ${POSTGRES_DB:-fichajes_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/init-db:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - fichajes-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fichajes_user} -d ${POSTGRES_DB:-fichajes_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # Redis Cache & Queue
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: fichajes-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_password}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - fichajes-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_password}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # Backend - NestJS (Development)
+  # ============================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: fichajes-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      # Database
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: ${POSTGRES_USER:-fichajes_user}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-fichajes_password}
+      DATABASE_NAME: ${POSTGRES_DB:-fichajes_db}
+      DATABASE_SSL: "false"
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_password}
+      # Auth
+      JWT_SECRET: ${JWT_SECRET:-super_secret_jwt_key_change_in_production}
+      AUTH_SECRET: ${AUTH_SECRET:-auth_secret_key_change_in_production}
+      # CORS
+      CORS_ORIGIN: http://localhost:3000
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+      - /app/dist
+    ports:
+      - "3001:3001"
+      - "9229:9229" # Debug port
+    networks:
+      - fichajes-network
+    depends_on:
+      - postgres
+      - redis
+    command: npm run start:dev
+
+  # ============================================
+  # Frontend - Next.js (Development)
+  # ============================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    container_name: fichajes-frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-nextauth_secret_change_in_production}
+      AUTH_BACKEND_URL: http://backend:3001
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    ports:
+      - "3000:3000"
+    networks:
+      - fichajes-network
+    depends_on:
+      - backend
+    command: npm run dev
+
+networks:
+  fichajes-network:
+    driver: bridge
+    name: fichajes-network
+
+volumes:
+  postgres_data:
+    name: fichajes-postgres-data
+  redis_data:
+    name: fichajes-redis-data
+  backend_dist:
+    name: fichajes-backend-dist

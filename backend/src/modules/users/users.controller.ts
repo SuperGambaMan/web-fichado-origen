@@ -20,7 +20,7 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { UsersService } from './users.service';
-import { CreateUserDto, UpdateUserDto } from './dto';
+import { CreateUserDto, UpdateUserDto, UpdatePasswordDto } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -81,6 +81,20 @@ export class UsersController {
     @CurrentUser('id') userId: string,
   ) {
     return this.usersService.update(id, updateUserDto, userId);
+  }
+
+  @Patch(':id/password')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Update user password' })
+  @ApiResponse({ status: 200, description: 'Password updated successfully' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  @ApiResponse({ status: 400, description: 'Invalid password' })
+  async updatePassword(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() updatePasswordDto: UpdatePasswordDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.usersService.updatePassword(id, updatePasswordDto, userId);
   }
 
   @Delete(':id')

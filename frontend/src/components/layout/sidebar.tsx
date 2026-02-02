@@ -13,11 +13,11 @@ import {
 } from '@heroicons/react/24/outline';
 
 interface SidebarProps {
-  user: {
-    name: string;
-    email: string;
-    role: string;
-  };
+  user?: {
+    name?: string;
+    email?: string;
+    role?: string;
+  } | null;
 }
 
 const navigation = [
@@ -34,7 +34,11 @@ const adminNavigation = [
 
 export function Sidebar({ user }: SidebarProps) {
   const pathname = usePathname();
-  const isAdmin = user.role === 'admin';
+  const isAdmin = user?.role === 'admin';
+
+  if (!user) {
+    return null; // Don't render sidebar if no user
+  }
 
   return (
     <div className="hidden w-64 flex-shrink-0 border-r border-gray-200 bg-white lg:block">

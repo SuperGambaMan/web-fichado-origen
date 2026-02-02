@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { signOut } from 'next-auth/react';
 
 export const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL + '/api/v1',
@@ -6,6 +7,9 @@ export const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+// Flag to prevent multiple signOut calls
+let isSigningOut = false;
 
 // Request interceptor
 api.interceptors.request.use(
@@ -22,11 +26,17 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response?.status === 401) {
-      // Handle unauthorized - could trigger refresh token here
+    // If backend returns 401, the token is invalid - force logout
+    if (error.response?.status === 401 && !isSigningOut) {
+      isSigningOut = true;
+      console.warn('Token invalid, forcing logout');
+
+      // Only run on client side
       if (typeof window !== 'undefined') {
-        window.location.href = '/login';
+        await signOut({ callbackUrl: '/login', redirect: true });
       }
+
+      isSigningOut = false;
     }
     return Promise.reject(error);
   }

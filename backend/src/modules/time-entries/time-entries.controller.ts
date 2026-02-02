@@ -30,6 +30,13 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { UserRole } from '../users/entities/user.entity';
 import { TimeEntryType, TimeEntryStatus } from './entities/time-entry.entity';
 
+// Helper function to safely parse query params to numbers
+const safeParseInt = (value: string | undefined): number | undefined => {
+  if (!value) return undefined;
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
 @ApiTags('time-entries')
 @ApiBearerAuth()
 @Controller('time-entries')
@@ -71,6 +78,20 @@ export class TimeEntriesController {
     return this.timeEntriesService.getTodayStatus(userId);
   }
 
+  @Get('stats/admin')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Get admin dashboard statistics' })
+  async getAdminStats() {
+    return this.timeEntriesService.getAdminDashboardStats();
+  }
+
+  @Get('stats/user')
+  @ApiOperation({ summary: 'Get user dashboard statistics' })
+  async getUserStats(@CurrentUser('id') userId: string) {
+    return this.timeEntriesService.getUserDashboardStats(userId);
+  }
+
   @Get('my-entries')
   @ApiOperation({ summary: 'Get my time entries' })
   @ApiQuery({ name: 'startDate', required: false })
@@ -81,14 +102,29 @@ export class TimeEntriesController {
     @CurrentUser('id') userId: string,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
     return this.timeEntriesService.findByUser(userId, {
       startDate: startDate ? new Date(startDate) : undefined,
       endDate: endDate ? new Date(endDate) : undefined,
-      page,
-      limit,
+      page: safeParseInt(page),
+      limit: safeParseInt(limit),
+    });
+  }
+
+  @Get('my-history')
+  @ApiOperation({ summary: 'Get my time entries history with daily summaries' })
+  @ApiQuery({ name: 'startDate', required: false })
+  @ApiQuery({ name: 'endDate', required: false })
+  async getMyHistory(
+    @CurrentUser('id') userId: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.timeEntriesService.getHistoryWithSummaries(userId, {
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
     });
   }
 
@@ -109,8 +145,8 @@ export class TimeEntriesController {
     @Query('endDate') endDate?: string,
     @Query('type') type?: TimeEntryType,
     @Query('status') status?: TimeEntryStatus,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
     return this.timeEntriesService.findAll({
       userId,
@@ -118,8 +154,8 @@ export class TimeEntriesController {
       endDate: endDate ? new Date(endDate) : undefined,
       type,
       status,
-      page,
-      limit,
+      page: safeParseInt(page),
+      limit: safeParseInt(limit),
     });
   }
 

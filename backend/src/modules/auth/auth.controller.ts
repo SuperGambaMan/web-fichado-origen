@@ -44,23 +44,19 @@ export class AuthController {
   }
 
   @Post('validate-session')
-  @Public()
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Validate Auth.js session token' })
-  @ApiResponse({ status: 200, description: 'Session valid' })
-  @ApiResponse({ status: 401, description: 'Invalid session' })
-  async validateSession(@Body() dto: ValidateSessionDto) {
-    const user = await this.authService.validateAuthJsSession(dto.sessionToken);
-    if (!user) {
-      return { valid: false, user: null };
-    }
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Validate JWT access token' })
+  @ApiResponse({ status: 200, description: 'Token valid' })
+  @ApiResponse({ status: 401, description: 'Invalid token' })
+  async validateSession(@CurrentUser() user: any) {
+    // If we reach here, the JWT guard has already validated the token
     return {
       valid: true,
       user: {
         id: user.id,
         email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
         role: user.role,
       },
     };

@@ -6,6 +6,23 @@ import { CreateTimeEntryDto, UpdateTimeEntryDto, AdminUpdateTimeEntryDto } from 
 import { AuditService } from '../audit/audit.service';
 import { AuditAction, AuditEntity } from '../audit/entities/audit-log.entity';
 
+// Interface for paired time entries - exported for use in controller
+export interface TimeEntryPair {
+  clockIn: TimeEntry;
+  clockOut: TimeEntry | null;
+  durationMinutes: number;
+}
+
+// Interface for daily work summary - exported for use in controller
+export interface DailyWorkSummary {
+  date: string;
+  pairs: TimeEntryPair[];
+  totalMinutes: number;
+  totalHours: number;
+  isComplete: boolean;
+  hasModifications: boolean;
+}
+
 @Injectable()
 export class TimeEntriesService {
   constructor(
@@ -13,6 +30,193 @@ export class TimeEntriesService {
     private readonly timeEntryRepository: Repository<TimeEntry>,
     private readonly auditService: AuditService,
   ) {}
+
+  /**
+   * Pairs clock-in and clock-out entries correctly.
+   *
+   * Logic:
+   * 1. Sort all entries by timestamp ascending
+   * 2. Iterate through entries sequentially
+   * 3. When we find a clock_in, look for the next clock_out
+   * 4. Pair them together and calculate duration
+   * 5. Handle edge cases: unpaired entries, multiple sessions per day
+   * 6. NEW: Auto-generate clock_out for consecutive clock_ins
+   *
+   * @param entries - Array of time entries (unsorted)
+   * @returns Array of paired entries with durations
+   */
+  private pairTimeEntries(entries: TimeEntry[]): TimeEntryPair[] {
+    // Sort entries by timestamp ascending
+    const sortedEntries = [...entries].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+
+    // Pre-process: Insert virtual clock_out entries for consecutive clock_ins
+    const processedEntries = this.insertVirtualClockOuts(sortedEntries);
+
+    const pairs: TimeEntryPair[] = [];
+    let currentClockIn: TimeEntry | null = null;
+
+    for (const entry of processedEntries) {
+      if (entry.type === TimeEntryType.CLOCK_IN) {
+        // If we have an unpaired clock_in, this shouldn't happen after pre-processing
+        // but handle it as a safety net
+        if (currentClockIn) {
+          pairs.push({
+            clockIn: currentClockIn,
+            clockOut: null,
+            durationMinutes: 0,
+          });
+        }
+        currentClockIn = entry;
+      } else if (entry.type === TimeEntryType.CLOCK_OUT) {
+        if (currentClockIn) {
+          // We have a valid pair
+          const clockInTime = new Date(currentClockIn.timestamp).getTime();
+          const clockOutTime = new Date(entry.timestamp).getTime();
+          const durationMinutes = Math.max(0, (clockOutTime - clockInTime) / 60000);
+
+          pairs.push({
+            clockIn: currentClockIn,
+            clockOut: entry,
+            durationMinutes,
+          });
+          currentClockIn = null;
+        }
+        // If no currentClockIn, ignore orphan clock_out
+      }
+    }
+
+    // Handle last unpaired clock_in (still working)
+    if (currentClockIn) {
+      const clockInTime = new Date(currentClockIn.timestamp).getTime();
+      const now = new Date().getTime();
+      const durationMinutes = Math.max(0, (now - clockInTime) / 60000);
+
+      pairs.push({
+        clockIn: currentClockIn,
+        clockOut: null,
+        durationMinutes,
+      });
+    }
+
+    return pairs;
+  }
+
+  /**
+   * Inserts virtual clock_out entries for consecutive clock_ins.
+   *
+   * Rule: When two consecutive clock_ins are detected:
+   * 1. Generate an artificial clock_out for the first entry
+   * 2. The virtual clock_out timestamp = timestamp of the second clock_in
+   * 3. Mark the virtual entry as generated (not to be saved to DB)
+   *
+   * This ensures all clock_ins have a corresponding clock_out,
+   * preventing negative times or invalid pairs.
+   *
+   * @param sortedEntries - Entries sorted by timestamp ascending
+   * @returns Entries with virtual clock_outs inserted
+   */
+  private insertVirtualClockOuts(sortedEntries: TimeEntry[]): TimeEntry[] {
+    if (sortedEntries.length === 0) {
+      return [];
+    }
+
+    const result: TimeEntry[] = [];
+
+    for (let i = 0; i < sortedEntries.length; i++) {
+      const currentEntry = sortedEntries[i];
+      const nextEntry = sortedEntries[i + 1];
+
+      // Check if current is clock_in and next is also clock_in (consecutive entries)
+      if (
+        currentEntry.type === TimeEntryType.CLOCK_IN &&
+        nextEntry &&
+        nextEntry.type === TimeEntryType.CLOCK_IN
+      ) {
+        // Add the current clock_in
+        result.push(currentEntry);
+
+        // Generate a virtual clock_out with timestamp of the next clock_in
+        const virtualClockOut: TimeEntry = {
+          ...currentEntry,
+          id: `virtual-${currentEntry.id}`,
+          type: TimeEntryType.CLOCK_OUT,
+          timestamp: nextEntry.timestamp,
+          notes: '[Salida automática - Entrada consecutiva detectada]',
+          isManual: false,
+        };
+
+        result.push(virtualClockOut);
+      } else {
+        // Normal entry, just add it
+        result.push(currentEntry);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Groups time entries by day and calculates daily summaries.
+   *
+   * @param entries - Array of time entries
+   * @returns Array of daily work summaries
+   */
+  private calculateDailySummaries(entries: TimeEntry[]): DailyWorkSummary[] {
+    // Group entries by date
+    const entriesByDate: Record<string, TimeEntry[]> = {};
+
+    for (const entry of entries) {
+      const dateKey = new Date(entry.timestamp).toISOString().split('T')[0];
+      if (!entriesByDate[dateKey]) {
+        entriesByDate[dateKey] = [];
+      }
+      entriesByDate[dateKey].push(entry);
+    }
+
+    // Calculate summary for each day
+    const summaries: DailyWorkSummary[] = [];
+
+    for (const [date, dayEntries] of Object.entries(entriesByDate)) {
+      const pairs = this.pairTimeEntries(dayEntries);
+      const totalMinutes = pairs.reduce((sum, pair) => sum + pair.durationMinutes, 0);
+      const isComplete = pairs.every(pair => pair.clockOut !== null);
+      const hasModifications = dayEntries.some(
+        entry => entry.status === TimeEntryStatus.MODIFIED
+      );
+
+      summaries.push({
+        date,
+        pairs,
+        totalMinutes,
+        totalHours: Math.round((totalMinutes / 60) * 100) / 100,
+        isComplete,
+        hasModifications,
+      });
+    }
+
+    // Sort by date descending
+    return summaries.sort((a, b) => b.date.localeCompare(a.date));
+  }
+
+  /**
+   * Calculates total worked minutes from an array of entries.
+   *
+   * @param entries - Array of time entries for a period
+   * @param includeCurrentSession - Whether to include ongoing session (no clock_out yet)
+   * @returns Total minutes worked
+   */
+  private calculateTotalMinutes(entries: TimeEntry[], includeCurrentSession = true): number {
+    const pairs = this.pairTimeEntries(entries);
+    return pairs.reduce((sum, pair) => {
+      // Only count if we have a clock_out, or if including current session
+      if (pair.clockOut || includeCurrentSession) {
+        return sum + pair.durationMinutes;
+      }
+      return sum;
+    }, 0);
+  }
 
   async clockIn(
     userId: string,
@@ -106,7 +310,9 @@ export class TimeEntriesService {
       limit?: number;
     },
   ): Promise<{ entries: TimeEntry[]; total: number }> {
-    const { startDate, endDate, page = 1, limit = 50 } = options || {};
+    const { startDate, endDate } = options || {};
+    const pageNum = options?.page && options.page > 0 ? options.page : 1;
+    const limitNum = options?.limit && options.limit > 0 ? options.limit : 50;
 
     const queryBuilder = this.timeEntryRepository
       .createQueryBuilder('entry')
@@ -125,11 +331,65 @@ export class TimeEntriesService {
 
     const [entries, total] = await queryBuilder
       .orderBy('entry.timestamp', 'DESC')
-      .skip((page - 1) * limit)
-      .take(limit)
+      .skip((pageNum - 1) * limitNum)
+      .take(limitNum)
       .getManyAndCount();
 
     return { entries, total };
+  }
+
+  /**
+   * Gets user's time entry history with daily summaries.
+   * This endpoint returns processed data ready for display.
+   */
+  async getHistoryWithSummaries(
+    userId: string,
+    options?: {
+      startDate?: Date;
+      endDate?: Date;
+    },
+  ): Promise<{
+    dailySummaries: DailyWorkSummary[];
+    totalDays: number;
+    totalHours: number;
+    averageHoursPerDay: number;
+  }> {
+    const { startDate, endDate } = options || {};
+
+    const queryBuilder = this.timeEntryRepository
+      .createQueryBuilder('entry')
+      .where('entry.userId = :userId', { userId });
+
+    if (startDate && endDate) {
+      queryBuilder.andWhere('entry.timestamp BETWEEN :startDate AND :endDate', {
+        startDate,
+        endDate,
+      });
+    } else if (startDate) {
+      queryBuilder.andWhere('entry.timestamp >= :startDate', { startDate });
+    } else if (endDate) {
+      queryBuilder.andWhere('entry.timestamp <= :endDate', { endDate });
+    }
+
+    const entries = await queryBuilder
+      .orderBy('entry.timestamp', 'ASC')
+      .getMany();
+
+    const dailySummaries = this.calculateDailySummaries(entries);
+
+    const totalDays = dailySummaries.length;
+    const totalHours = dailySummaries.reduce((sum, day) => sum + day.totalHours, 0);
+    const completeDays = dailySummaries.filter(day => day.isComplete).length;
+    const averageHoursPerDay = completeDays > 0
+      ? Math.round((totalHours / completeDays) * 100) / 100
+      : 0;
+
+    return {
+      dailySummaries,
+      totalDays,
+      totalHours: Math.round(totalHours * 100) / 100,
+      averageHoursPerDay,
+    };
   }
 
   async findAll(options?: {
@@ -141,7 +401,9 @@ export class TimeEntriesService {
     page?: number;
     limit?: number;
   }): Promise<{ entries: TimeEntry[]; total: number }> {
-    const { userId, startDate, endDate, type, status, page = 1, limit = 50 } = options || {};
+    const { userId, startDate, endDate, type, status } = options || {};
+    const pageNum = options?.page && options.page > 0 ? options.page : 1;
+    const limitNum = options?.limit && options.limit > 0 ? options.limit : 50;
 
     const queryBuilder = this.timeEntryRepository
       .createQueryBuilder('entry')
@@ -168,8 +430,8 @@ export class TimeEntriesService {
 
     const [entries, total] = await queryBuilder
       .orderBy('entry.timestamp', 'DESC')
-      .skip((page - 1) * limit)
-      .take(limit)
+      .skip((pageNum - 1) * limitNum)
+      .take(limitNum)
       .getManyAndCount();
 
     return { entries, total };
@@ -259,23 +521,188 @@ export class TimeEntriesService {
     const lastEntry = await this.getLastEntry(userId);
     const isClockedIn = lastEntry?.type === TimeEntryType.CLOCK_IN;
 
-    let totalMinutes = 0;
-    for (let i = 0; i < todayEntries.length; i += 2) {
-      const clockIn = todayEntries[i];
-      const clockOut = todayEntries[i + 1];
-      if (clockIn && clockOut) {
-        totalMinutes +=
-          (clockOut.timestamp.getTime() - clockIn.timestamp.getTime()) / 60000;
-      } else if (clockIn && isClockedIn) {
-        totalMinutes += (new Date().getTime() - clockIn.timestamp.getTime()) / 60000;
-      }
-    }
+    // Use the new robust pairing logic
+    const totalMinutes = this.calculateTotalMinutes(todayEntries, isClockedIn);
 
     return {
       isClockedIn,
       lastEntry,
       todayEntries,
       totalHoursToday: Math.round((totalMinutes / 60) * 100) / 100,
+    };
+  }
+
+  async getAdminDashboardStats(): Promise<{
+    activeEmployees: number;
+    workingNow: number;
+    todayUniqueClockIns: number;
+    attendancePercentage: number;
+    pendingIncidents: number;
+    newEmployeesThisMonth: number;
+  }> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    // Get first day of current month
+    const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+
+    // Count active employees (contracted employees with status=active)
+    const activeEmployeesQuery = await this.timeEntryRepository.manager
+      .createQueryBuilder()
+      .select('COUNT(DISTINCT user.id)', 'count')
+      .from('users', 'user')
+      .where('user.status = :status', { status: 'active' })
+      .getRawOne();
+
+    const activeEmployees = parseInt(activeEmployeesQuery?.count || '0', 10);
+
+    // Count UNIQUE employees who clocked in today (not number of clock-ins)
+    const todayUniqueClockInsQuery = await this.timeEntryRepository
+      .createQueryBuilder('entry')
+      .select('COUNT(DISTINCT entry.user_id)', 'count')
+      .where('entry.type = :type', { type: TimeEntryType.CLOCK_IN })
+      .andWhere('entry.timestamp >= :today', { today })
+      .andWhere('entry.timestamp < :tomorrow', { tomorrow })
+      .getRawOne();
+
+    const todayUniqueClockIns = parseInt(todayUniqueClockInsQuery?.count || '0', 10);
+
+    // Calculate attendance percentage based on unique employees
+    const attendancePercentage = activeEmployees > 0
+      ? Math.round((todayUniqueClockIns / activeEmployees) * 100)
+      : 0;
+
+    // Count employees currently working (last entry is clock_in)
+    const workingNowQuery = await this.timeEntryRepository
+      .createQueryBuilder('entry')
+      .select('COUNT(DISTINCT entry.user_id)', 'count')
+      .where((qb) => {
+        const subQuery = qb
+          .subQuery()
+          .select('MAX(e2.timestamp)')
+          .from('time_entries', 'e2')
+          .where('e2.user_id = entry.user_id')
+          .getQuery();
+        return `entry.timestamp = ${subQuery} AND entry.type = :clockInType`;
+      })
+      .setParameter('clockInType', TimeEntryType.CLOCK_IN)
+      .getRawOne();
+
+    const workingNow = parseInt(workingNowQuery?.count || '0', 10);
+
+    // Count pending incidents (modified entries that need review)
+    const pendingIncidentsQuery = await this.timeEntryRepository
+      .createQueryBuilder('entry')
+      .where('entry.status = :status', { status: TimeEntryStatus.MODIFIED })
+      .getCount();
+
+    // Count new employees this month
+    const newEmployeesQuery = await this.timeEntryRepository.manager
+      .createQueryBuilder()
+      .select('COUNT(*)', 'count')
+      .from('users', 'user')
+      .where('user.created_at >= :firstDayOfMonth', { firstDayOfMonth })
+      .getRawOne();
+
+    const newEmployeesThisMonth = parseInt(newEmployeesQuery?.count || '0', 10);
+
+    return {
+      activeEmployees,
+      workingNow,
+      todayUniqueClockIns,
+      attendancePercentage,
+      pendingIncidents: pendingIncidentsQuery,
+      newEmployeesThisMonth,
+    };
+  }
+
+  async getUserDashboardStats(userId: string): Promise<{
+    hoursThisWeek: number;
+    daysWorkedThisWeek: number;
+    daysWorkedThisMonth: number;
+    averageDailyHours: number;
+    comparedToAverage: number;
+  }> {
+    const today = new Date();
+
+    // Get start of current week (Monday)
+    const startOfWeek = new Date(today);
+    const dayOfWeek = today.getDay();
+    const diff = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // Monday is first day
+    startOfWeek.setDate(today.getDate() - diff);
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    // Get start of month
+    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+
+    // Get entries for this week
+    const weekEntries = await this.timeEntryRepository.find({
+      where: {
+        userId,
+        timestamp: Between(startOfWeek, today),
+      },
+      order: { timestamp: 'ASC' },
+    });
+
+    // Calculate hours this week
+    let totalMinutesWeek = 0;
+    const daysWithEntries = new Set<string>();
+
+    for (let i = 0; i < weekEntries.length; i++) {
+      const entry = weekEntries[i];
+      daysWithEntries.add(entry.timestamp.toDateString());
+
+      if (entry.type === TimeEntryType.CLOCK_IN) {
+        const nextEntry = weekEntries[i + 1];
+        if (nextEntry && nextEntry.type === TimeEntryType.CLOCK_OUT) {
+          totalMinutesWeek += (nextEntry.timestamp.getTime() - entry.timestamp.getTime()) / 60000;
+        }
+      }
+    }
+
+    const hoursThisWeek = Math.round((totalMinutesWeek / 60) * 100) / 100;
+    const daysWorkedThisWeek = daysWithEntries.size;
+
+    // Get entries for this month
+    const monthEntries = await this.timeEntryRepository.find({
+      where: {
+        userId,
+        timestamp: Between(startOfMonth, today),
+      },
+      order: { timestamp: 'ASC' },
+    });
+
+    const monthDaysWithEntries = new Set<string>();
+    let totalMinutesMonth = 0;
+
+    for (let i = 0; i < monthEntries.length; i++) {
+      const entry = monthEntries[i];
+      monthDaysWithEntries.add(entry.timestamp.toDateString());
+
+      if (entry.type === TimeEntryType.CLOCK_IN) {
+        const nextEntry = monthEntries[i + 1];
+        if (nextEntry && nextEntry.type === TimeEntryType.CLOCK_OUT) {
+          totalMinutesMonth += (nextEntry.timestamp.getTime() - entry.timestamp.getTime()) / 60000;
+        }
+      }
+    }
+
+    const daysWorkedThisMonth = monthDaysWithEntries.size;
+    const averageDailyHours = daysWorkedThisMonth > 0
+      ? Math.round((totalMinutesMonth / 60 / daysWorkedThisMonth) * 100) / 100
+      : 0;
+
+    // Compare to 8h standard
+    const comparedToAverage = Math.round((averageDailyHours - 8) * 100) / 100;
+
+    return {
+      hoursThisWeek,
+      daysWorkedThisWeek,
+      daysWorkedThisMonth,
+      averageDailyHours,
+      comparedToAverage,
     };
   }
 }

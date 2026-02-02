@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
-import { signIn } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect } from 'react';
+import { signIn, signOut, useSession } from 'next-auth/react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -17,7 +17,29 @@ type LoginFormData = z.infer<typeof loginSchema>;
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const { data: session, status } = useSession();
   const [isLoading, setIsLoading] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+
+  // Clear any invalid sessions when arriving at login page
+  useEffect(() => {
+    const clearInvalidSession = async () => {
+      // If there's a session but it's invalid (no accessToken or has error)
+      if (status === 'authenticated' && session) {
+        const hasError = (session as any).error === 'TokenInvalid';
+        const noToken = !session.accessToken;
+
+        if (hasError || noToken) {
+          setIsClearing(true);
+          await signOut({ redirect: false });
+          setIsClearing(false);
+        }
+      }
+    };
+
+    clearInvalidSession();
+  }, [session, status]);
 
   const {
     register,
@@ -41,7 +63,8 @@ export default function LoginPage() {
         toast.error('Credenciales inválidas');
       } else {
         toast.success('¡Bienvenido!');
-        router.push('/dashboard');
+        const callbackUrl = searchParams.get('callbackUrl') || '/dashboard';
+        router.push(callbackUrl);
         router.refresh();
       }
     } catch (error) {

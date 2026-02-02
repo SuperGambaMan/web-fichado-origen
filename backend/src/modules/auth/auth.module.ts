@@ -19,7 +19,7 @@ import { AuditModule } from '../audit/audit.module';
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('app.jwtSecret'),
         signOptions: {
-          expiresIn: '15m',
+          expiresIn: '1h', // Token expires in 1 hour
         },
       }),
     }),

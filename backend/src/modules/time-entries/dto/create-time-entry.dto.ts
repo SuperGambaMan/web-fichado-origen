@@ -1,19 +1,12 @@
 import {
-  IsEnum,
-  IsNotEmpty,
   IsOptional,
   IsString,
   IsNumber,
   IsDateString,
 } from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { TimeEntryType } from '../entities/time-entry.entity';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateTimeEntryDto {
-  @ApiProperty({ enum: TimeEntryType })
-  @IsEnum(TimeEntryType)
-  @IsNotEmpty()
-  type: TimeEntryType;
 
   @ApiPropertyOptional({ example: '2024-01-15T09:00:00.000Z' })
   @IsDateString()

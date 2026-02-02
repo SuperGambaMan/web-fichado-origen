@@ -2,12 +2,13 @@ import {
   Injectable,
   NotFoundException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User, UserRole, UserStatus } from './entities/user.entity';
-import { CreateUserDto, UpdateUserDto } from './dto';
+import { CreateUserDto, UpdateUserDto, UpdatePasswordDto } from './dto';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction, AuditEntity } from '../audit/entities/audit-log.entity';
 
@@ -55,10 +56,15 @@ export class UsersService {
   async findAll(options?: {
     role?: UserRole;
     status?: UserStatus;
-    page?: number;
-    limit?: number;
+    page?: number | string;
+    limit?: number | string;
   }): Promise<{ users: User[]; total: number }> {
-    const { role, status, page = 1, limit = 20 } = options || {};
+    const { role, status } = options || {};
+
+    // Convert page and limit to numbers with defaults
+    const pageNum = Math.max(1, parseInt(String(options?.page || 1), 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(String(options?.limit || 20), 10) || 20));
+    const skip = (pageNum - 1) * limitNum;
 
     const queryBuilder = this.userRepository.createQueryBuilder('user');
 
@@ -72,8 +78,8 @@ export class UsersService {
 
     const [users, total] = await queryBuilder
       .orderBy('user.createdAt', 'DESC')
-      .skip((page - 1) * limit)
-      .take(limit)
+      .skip(skip)
+      .take(limitNum)
       .getManyAndCount();
 
     return { users, total };
@@ -147,11 +153,16 @@ export class UsersService {
 
   async updatePassword(
     id: string,
-    newPassword: string,
+    updatePasswordDto: UpdatePasswordDto,
     updatedBy?: string,
-  ): Promise<void> {
+  ): Promise<{ message: string }> {
     const user = await this.findOne(id);
-    user.password = await bcrypt.hash(newPassword, 12);
+
+    if (!updatePasswordDto.password || updatePasswordDto.password.length < 8) {
+      throw new BadRequestException('La contraseña debe tener al menos 8 caracteres');
+    }
+
+    user.password = await bcrypt.hash(updatePasswordDto.password, 12);
     await this.userRepository.save(user);
 
     // Audit log
@@ -162,6 +173,8 @@ export class UsersService {
       entityId: id,
       description: `Password changed for user ${user.email}`,
     });
+
+    return { message: 'Contraseña actualizada correctamente' };
   }
 
   async updateLastLogin(id: string): Promise<void> {

@@ -8,16 +8,20 @@ import {
 } from '@heroicons/react/24/outline';
 
 interface HeaderProps {
-  user: {
-    name: string;
-    role: string;
-  };
+  user?: {
+    name?: string;
+    role?: string;
+  } | null;
 }
 
 export function Header({ user }: HeaderProps) {
   const handleSignOut = () => {
     signOut({ callbackUrl: '/login' });
   };
+
+  if (!user) {
+    return null; // Don't render header if no user
+  }
 
   return (
     <header className="flex h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
@@ -27,7 +31,7 @@ export function Header({ user }: HeaderProps) {
         </button>
         <div className="hidden lg:block">
           <span className="inline-flex items-center rounded-full bg-primary-100 px-3 py-1 text-sm font-medium text-primary-700">
-            {user.role === 'admin'
+            {user?.role === 'admin'
               ? 'Administrador'
               : user.role === 'employee'
               ? 'Empleado'

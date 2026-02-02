@@ -5,15 +5,20 @@ import { useSession } from 'next-auth/react';
 import toast from 'react-hot-toast';
 import { PlayIcon, StopIcon } from '@heroicons/react/24/solid';
 import { api } from '@/lib/api';
+import { entriesEvents } from './recent-entries';
 
 export function ClockWidget() {
   const { data: session } = useSession();
-  const [currentTime, setCurrentTime] = useState(new Date());
+  const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const [isClockedIn, setIsClockedIn] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [todayHours, setTodayHours] = useState(0);
+  const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
+    setIsMounted(true);
+    setCurrentTime(new Date());
+
     const timer = setInterval(() => {
       setCurrentTime(new Date());
     }, 1000);
@@ -21,16 +26,19 @@ export function ClockWidget() {
     return () => clearInterval(timer);
   }, []);
 
+  const accessToken = session?.accessToken;
+
   useEffect(() => {
-    if (session?.accessToken) {
+    if (accessToken) {
       fetchStatus();
     }
-  }, [session]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken]);
 
   const fetchStatus = async () => {
     try {
       const response = await api.get('/time-entries/status', {
-        headers: { Authorization: `Bearer ${session?.accessToken}` },
+        headers: { Authorization: `Bearer ${accessToken}` },
       });
       setIsClockedIn(response.data.isClockedIn);
       setTodayHours(response.data.totalHoursToday);
@@ -46,13 +54,15 @@ export function ClockWidget() {
       const endpoint = isClockedIn ? '/time-entries/clock-out' : '/time-entries/clock-in';
       await api.post(
         endpoint,
-        { type: isClockedIn ? 'clock_out' : 'clock_in' },
-        { headers: { Authorization: `Bearer ${session?.accessToken}` } }
+        {},
+        { headers: { Authorization: `Bearer ${accessToken}` } }
       );
 
       setIsClockedIn(!isClockedIn);
       toast.success(isClockedIn ? '¡Salida registrada!' : '¡Entrada registrada!');
       fetchStatus();
+      // Emitir evento para actualizar la lista de fichajes
+      entriesEvents.emit();
     } catch (error: any) {
       toast.error(error.response?.data?.message || 'Error al registrar');
     } finally {
@@ -64,11 +74,11 @@ export function ClockWidget() {
     <div className="card flex flex-col items-center justify-center py-8">
       <div className="mb-6 text-center">
         <p className="text-5xl font-bold tabular-nums text-gray-900">
-          {currentTime.toLocaleTimeString('es-ES', {
+          {isMounted && currentTime ? currentTime.toLocaleTimeString('es-ES', {
             hour: '2-digit',
             minute: '2-digit',
             second: '2-digit',
-          })}
+          }) : '--:--:--'}
         </p>
         <p className="mt-2 text-sm text-gray-500">
           Horas hoy: <span className="font-semibold">{todayHours.toFixed(2)}h</span>

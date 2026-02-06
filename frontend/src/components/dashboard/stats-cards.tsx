@@ -30,7 +30,6 @@ interface UserStats {
   daysWorkedThisWeek: number;
   daysWorkedThisMonth: number;
   averageDailyHours: number;
-  comparedToAverage: number;
 }
 
 export function StatsCards({ isAdmin }: StatsCardsProps) {
@@ -137,8 +136,8 @@ export function StatsCards({ isAdmin }: StatsCardsProps) {
           name: 'Media diaria',
           value: `${userStats?.averageDailyHours?.toFixed(1) || '0'}h`,
           icon: ChartBarIcon,
-          change: `${(userStats?.comparedToAverage || 0) >= 0 ? '+' : ''}${userStats?.comparedToAverage?.toFixed(1) || '0'}h vs 8h`,
-          changeType: (userStats?.comparedToAverage || 0) >= 0 ? 'positive' : 'negative',
+          change: 'por día completado',
+          changeType: 'neutral',
         },
       ];
 

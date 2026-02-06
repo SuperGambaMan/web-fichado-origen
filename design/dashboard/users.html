@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Usuarios - Fichajes (Design)</title>
+</head>
+<body>
+  <header>
+    <h1>Usuarios</h1>
+    <nav>
+      <a href="index.html">Dashboard</a>
+      <a href="history.html">Historial</a>
+      <a href="time-entries.html">Fichajes</a>
+    </nav>
+  </header>
+
+  <main>
+    <section>
+      <h2>Tabla de usuarios</h2>
+      <table>
+        <thead>
+          <tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Activo</th><th>Creado</th><th>Acciones</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Juan</td><td>juan@example.com</td><td>admin</td><td>Si</td><td>2026-01-10</td><td>Editar | Borrar</td></tr>
+          <tr><td>María</td><td>maria@example.com</td><td>user</td><td>Si</td><td>2026-01-20</td><td>Editar | Borrar</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Crear usuario</h3>
+      <form>
+        <label>Nombre: <input /></label>
+        <label>Email: <input /></label>
+        <label>Rol: <select><option>admin</option><option>user</option></select></label>
+        <button type="submit">Crear</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

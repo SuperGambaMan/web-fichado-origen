@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Dashboard - Fichajes (Design)</title>
+</head>
+<body>
+  <header>
+    <h1>Dashboard</h1>
+    <nav>
+      <a href="index.html">Logout</a>
+      <a href="history.html">Historial</a>
+      <a href="time-entries.html">Fichajes</a>
+      <a href="users.html">Usuarios</a>
+      <a href="audit.html">Auditoría</a>
+    </nav>
+  </header>
+
+  <aside>
+    <h2>Sidebar</h2>
+    <ul>
+      <li><a href="index.html">Resumen</a></li>
+      <li><a href="history.html">Historial</a></li>
+      <li><a href="time-entries.html">Fichajes</a></li>
+      <li><a href="users.html">Usuarios</a></li>
+      <li><a href="audit.html">Auditoría</a></li>
+    </ul>
+  </aside>
+
+  <section>
+    <h2>Tarjetas</h2>
+    <div class="cards">
+      <div class="card">Empleados activos: 12</div>
+      <div class="card">Fichajes hoy: 34</div>
+      <div class="card">Incidencias: 2</div>
+    </div>
+
+    <h2>Formulario de fichaje</h2>
+    <form>
+      <label>
+        Tipo:
+        <select>
+          <option>Entrada</option>
+          <option>Salida</option>
+        </select>
+      </label>
+      <label>
+        Notas:
+        <input />
+      </label>
+      <button type="submit">Enviar</button>
+    </form>
+
+    <h2>Listado reciente</h2>
+    <table>
+      <thead>
+        <tr><th>Usuario</th><th>Tipo</th><th>Fecha</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Juan</td><td>Entrada</td><td>2026-02-05 09:00</td></tr>
+        <tr><td>María</td><td>Salida</td><td>2026-02-05 17:00</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+</body>
+</html>

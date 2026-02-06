@@ -2,6 +2,7 @@ import { auth } from '@/lib/auth';
 import { ClockWidget } from '@/components/dashboard/clock-widget';
 import { StatsCards } from '@/components/dashboard/stats-cards';
 import { RecentEntries } from '@/components/dashboard/recent-entries';
+import { PendingIncidentsAlert } from '@/components/dashboard/pending-incidents-alert';
 
 export default async function DashboardPage() {
   const session = await auth();
@@ -22,6 +23,8 @@ export default async function DashboardPage() {
           })}
         </p>
       </div>
+
+      <PendingIncidentsAlert />
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-1">

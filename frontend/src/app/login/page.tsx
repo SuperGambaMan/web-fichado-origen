@@ -60,6 +60,7 @@ export default function LoginPage() {
       });
 
       if (result?.error) {
+        console.log('Login error:', result.error);
         toast.error('Credenciales inválidas');
       } else {
         toast.success('¡Bienvenido!');

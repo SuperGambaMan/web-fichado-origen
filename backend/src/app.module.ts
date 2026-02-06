@@ -16,6 +16,7 @@ import { UsersModule } from './modules/users/users.module';
 import { TimeEntriesModule } from './modules/time-entries/time-entries.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { HealthModule } from './modules/health/health.module';
+import { IncidentsModule } from './modules/incidents/incidents.module';
 
 @Module({
   imports: [
@@ -86,6 +87,7 @@ import { HealthModule } from './modules/health/health.module';
     UsersModule,
     TimeEntriesModule,
     AuditModule,
+    IncidentsModule,
   ],
   providers: [
     {

@@ -2,27 +2,22 @@ import {
   Controller,
   Get,
   Post,
-  Body,
   Patch,
-  Param,
   Delete,
+  Param,
   Query,
+  Body,
   UseGuards,
-  ParseUUIDPipe,
+  Req,
   HttpCode,
   HttpStatus,
-  Req,
+  ParseUUIDPipe,
 } from '@nestjs/common';
-import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiBearerAuth,
-  ApiQuery,
-} from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiQuery, ApiBearerAuth, ApiResponse } from '@nestjs/swagger';
 import { Request } from 'express';
 import { TimeEntriesService } from './time-entries.service';
-import { CreateTimeEntryDto, AdminUpdateTimeEntryDto } from './dto';
+import { TimeEntriesSchedulerService } from './time-entries.scheduler.service';
+import { CreateTimeEntryDto, UpdateTimeEntryDto, AdminUpdateTimeEntryDto } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -42,7 +37,10 @@ const safeParseInt = (value: string | undefined): number | undefined => {
 @Controller('time-entries')
 @UseGuards(JwtAuthGuard)
 export class TimeEntriesController {
-  constructor(private readonly timeEntriesService: TimeEntriesService) {}
+  constructor(
+    private readonly timeEntriesService: TimeEntriesService,
+    private readonly schedulerService: TimeEntriesSchedulerService,
+  ) {}
 
   @Post('clock-in')
   @ApiOperation({ summary: 'Clock in' })
@@ -50,7 +48,7 @@ export class TimeEntriesController {
   async clockIn(
     @CurrentUser('id') userId: string,
     @Body() dto: CreateTimeEntryDto,
-    @Req() req: Request,
+    @Req() req: any,
   ) {
     return this.timeEntriesService.clockIn(userId, dto, {
       ipAddress: req.ip,
@@ -64,7 +62,7 @@ export class TimeEntriesController {
   async clockOut(
     @CurrentUser('id') userId: string,
     @Body() dto: CreateTimeEntryDto,
-    @Req() req: Request,
+    @Req() req: any,
   ) {
     return this.timeEntriesService.clockOut(userId, dto, {
       ipAddress: req.ip,
@@ -89,7 +87,33 @@ export class TimeEntriesController {
   @Get('stats/user')
   @ApiOperation({ summary: 'Get user dashboard statistics' })
   async getUserStats(@CurrentUser('id') userId: string) {
+    // Detect and process incomplete workdays when user checks their stats
+    await this.timeEntriesService.detectAndProcessIncompleteWorkdays(userId);
     return this.timeEntriesService.getUserDashboardStats(userId);
+  }
+
+  @Post('process-incomplete')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Process incomplete workdays for all users (admin)' })
+  async processIncompleteWorkdays() {
+    const result = await this.schedulerService.triggerManualCheck();
+    return {
+      message: 'Incomplete workdays processing triggered',
+      jobId: result.jobId,
+    };
+  }
+
+  @Get('scheduled-jobs')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Get scheduled jobs information (admin)' })
+  async getScheduledJobs() {
+    const jobs = await this.schedulerService.getScheduledJobs();
+    return {
+      jobs,
+      total: jobs.length,
+    };
   }
 
   @Get('my-entries')

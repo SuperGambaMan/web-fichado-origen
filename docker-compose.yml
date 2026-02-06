@@ -88,6 +88,8 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:-auth_secret_key_change_in_production}
       # Set to true to invalidate all sessions when backend restarts (useful for development)
       INVALIDATE_SESSIONS_ON_RESTART: "true"
+      # Timezone offset in hours (e.g., 1 for UTC+1, -5 for UTC-5)
+      TZ_OFFSET_HOURS: ${TZ_OFFSET_HOURS:-1}
       # CORS
       CORS_ORIGIN: http://localhost:3000
     volumes:

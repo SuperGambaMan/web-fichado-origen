@@ -10,6 +10,7 @@ import {
   DocumentTextIcon,
   Cog6ToothIcon,
   ClipboardDocumentListIcon,
+  ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
 
 interface SidebarProps {
@@ -24,10 +25,12 @@ const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
   { name: 'Fichajes', href: '/dashboard/time-entries', icon: ClockIcon },
   { name: 'Historial', href: '/dashboard/history', icon: DocumentTextIcon },
+  { name: 'Mis Incidencias', href: '/dashboard/my-incidents', icon: ExclamationTriangleIcon },
 ];
 
 const adminNavigation = [
   { name: 'Usuarios', href: '/dashboard/users', icon: UsersIcon },
+  { name: 'Todas las Incidencias', href: '/dashboard/incidents', icon: ExclamationTriangleIcon },
   { name: 'Auditoría', href: '/dashboard/audit', icon: ClipboardDocumentListIcon },
   { name: 'Configuración', href: '/dashboard/settings', icon: Cog6ToothIcon },
 ];

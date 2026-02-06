@@ -1,10 +1,11 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between } from 'typeorm';
+import { Repository, Between, LessThan } from 'typeorm';
 import { TimeEntry, TimeEntryType, TimeEntryStatus } from './entities/time-entry.entity';
 import { CreateTimeEntryDto, UpdateTimeEntryDto, AdminUpdateTimeEntryDto } from './dto';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction, AuditEntity } from '../audit/entities/audit-log.entity';
+import { IncidentsService } from '../incidents/incidents.service';
 
 // Interface for paired time entries - exported for use in controller
 export interface TimeEntryPair {
@@ -25,11 +26,40 @@ export interface DailyWorkSummary {
 
 @Injectable()
 export class TimeEntriesService {
+  // Offset de zona horaria en horas (por defecto +1 para Europa/Madrid)
+  private readonly timezoneOffsetHours: number;
+
   constructor(
     @InjectRepository(TimeEntry)
     private readonly timeEntryRepository: Repository<TimeEntry>,
     private readonly auditService: AuditService,
-  ) {}
+    @Inject(forwardRef(() => IncidentsService))
+    private readonly incidentsService: IncidentsService,
+  ) {
+    // Leer offset desde variable de entorno o usar +1 como default
+    const offsetStr = process.env.TZ_OFFSET_HOURS;
+    this.timezoneOffsetHours = offsetStr ? parseInt(offsetStr, 10) : 1;
+  }
+
+  /**
+   * Calcula el fin del día (23:59:59) en la zona horaria local del usuario
+   * basándose en un timestamp dado.
+   */
+  private getEndOfDayInLocalTimezone(timestamp: Date): Date {
+    const date = new Date(timestamp);
+    // Crear fecha en UTC para las 23:59:59 hora local
+    // Si hora local es UTC+1, entonces 23:59:59 local = 22:59:59 UTC
+    const utcHours = 23 - this.timezoneOffsetHours;
+    return new Date(Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate(),
+      utcHours,
+      59,
+      59,
+      999
+    ));
+  }
 
   /**
    * Pairs clock-in and clock-out entries correctly.
@@ -47,11 +77,13 @@ export class TimeEntriesService {
    */
   private pairTimeEntries(entries: TimeEntry[]): TimeEntryPair[] {
     // Sort entries by timestamp ascending
-    const sortedEntries = [...entries].sort(
+    let sortedEntries = [...entries].sort(
       (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
 
-    // Pre-process: Insert virtual clock_out entries for consecutive clock_ins
+    // Primero, insertar salidas automáticas de fin de día
+    sortedEntries = this.insertEndOfDayAutoClockOuts(sortedEntries);
+    // Luego, insertar salidas virtuales por entradas consecutivas
     const processedEntries = this.insertVirtualClockOuts(sortedEntries);
 
     const pairs: TimeEntryPair[] = [];
@@ -101,6 +133,44 @@ export class TimeEntriesService {
     }
 
     return pairs;
+  }
+
+  /**
+   * Inserta salidas virtuales a las 23:59:59 para entradas sin salida al final del día.
+   * Se ejecuta antes del emparejamiento entrada/salida.
+   */
+  private insertEndOfDayAutoClockOuts(entries: TimeEntry[]): TimeEntry[] {
+    if (entries.length === 0) return [];
+    const result: TimeEntry[] = [];
+    let i = 0;
+    while (i < entries.length) {
+      const entry = entries[i];
+      result.push(entry);
+      if (
+        entry.type === TimeEntryType.CLOCK_IN &&
+        (i === entries.length - 1 || entries[i + 1].type === TimeEntryType.CLOCK_IN)
+      ) {
+        // Buscar si la siguiente entrada es de otro día o no hay más
+        const entryDate = new Date(entry.timestamp);
+        const nextEntry = entries[i + 1];
+        const isLast = !nextEntry || new Date(nextEntry.timestamp).toDateString() !== entryDate.toDateString();
+        if (isLast) {
+          // Generar salida virtual a las 23:59:59 del mismo día (zona horaria local)
+          const autoExit = this.getEndOfDayInLocalTimezone(entry.timestamp);
+          const virtualClockOut: TimeEntry = {
+            ...entry,
+            id: `autoexit-${entry.id}`,
+            type: TimeEntryType.CLOCK_OUT,
+            timestamp: autoExit,
+            notes: '[Salida automática - Fin de día]',
+            isManual: false,
+          };
+          result.push(virtualClockOut);
+        }
+      }
+      i++;
+    }
+    return result;
   }
 
   /**
@@ -592,11 +662,8 @@ export class TimeEntriesService {
 
     const workingNow = parseInt(workingNowQuery?.count || '0', 10);
 
-    // Count pending incidents (modified entries that need review)
-    const pendingIncidentsQuery = await this.timeEntryRepository
-      .createQueryBuilder('entry')
-      .where('entry.status = :status', { status: TimeEntryStatus.MODIFIED })
-      .getCount();
+    // Count pending incidents from incidents table
+    const pendingIncidentsCount = await this.incidentsService.getPendingCount();
 
     // Count new employees this month
     const newEmployeesQuery = await this.timeEntryRepository.manager
@@ -613,7 +680,7 @@ export class TimeEntriesService {
       workingNow,
       todayUniqueClockIns,
       attendancePercentage,
-      pendingIncidents: pendingIncidentsQuery,
+      pendingIncidents: pendingIncidentsCount,
       newEmployeesThisMonth,
     };
   }
@@ -623,7 +690,6 @@ export class TimeEntriesService {
     daysWorkedThisWeek: number;
     daysWorkedThisMonth: number;
     averageDailyHours: number;
-    comparedToAverage: number;
   }> {
     const today = new Date();
 
@@ -647,23 +713,30 @@ export class TimeEntriesService {
     });
 
     // Calculate hours this week
+    // daysWorkedThisWeek: any day with at least one CLOCK_IN counts
+    // completedDaysWeek: only days with complete pairs (for average calculation)
     let totalMinutesWeek = 0;
-    const daysWithEntries = new Set<string>();
+    const daysWithEntriesWeek = new Set<string>();
+    const completedDaysWeek = new Set<string>();
 
     for (let i = 0; i < weekEntries.length; i++) {
       const entry = weekEntries[i];
-      daysWithEntries.add(entry.timestamp.toDateString());
 
+      // Count any day with a CLOCK_IN as a worked day
       if (entry.type === TimeEntryType.CLOCK_IN) {
+        daysWithEntriesWeek.add(entry.timestamp.toDateString());
+
         const nextEntry = weekEntries[i + 1];
         if (nextEntry && nextEntry.type === TimeEntryType.CLOCK_OUT) {
           totalMinutesWeek += (nextEntry.timestamp.getTime() - entry.timestamp.getTime()) / 60000;
+          // Mark day as completed for average calculation
+          completedDaysWeek.add(entry.timestamp.toDateString());
         }
       }
     }
 
     const hoursThisWeek = Math.round((totalMinutesWeek / 60) * 100) / 100;
-    const daysWorkedThisWeek = daysWithEntries.size;
+    const daysWorkedThisWeek = daysWithEntriesWeek.size;
 
     // Get entries for this month
     const monthEntries = await this.timeEntryRepository.find({
@@ -674,35 +747,190 @@ export class TimeEntriesService {
       order: { timestamp: 'ASC' },
     });
 
-    const monthDaysWithEntries = new Set<string>();
+    // daysWorkedThisMonth: any day with at least one CLOCK_IN counts
+    // completedDaysMonth: only days with complete pairs (for average calculation)
+    const daysWithEntriesMonth = new Set<string>();
+    const completedDaysMonth = new Set<string>();
     let totalMinutesMonth = 0;
 
     for (let i = 0; i < monthEntries.length; i++) {
       const entry = monthEntries[i];
-      monthDaysWithEntries.add(entry.timestamp.toDateString());
 
+      // Count any day with a CLOCK_IN as a worked day
       if (entry.type === TimeEntryType.CLOCK_IN) {
+        daysWithEntriesMonth.add(entry.timestamp.toDateString());
+
         const nextEntry = monthEntries[i + 1];
         if (nextEntry && nextEntry.type === TimeEntryType.CLOCK_OUT) {
           totalMinutesMonth += (nextEntry.timestamp.getTime() - entry.timestamp.getTime()) / 60000;
+          // Mark day as completed for average calculation
+          completedDaysMonth.add(entry.timestamp.toDateString());
         }
       }
     }
 
-    const daysWorkedThisMonth = monthDaysWithEntries.size;
-    const averageDailyHours = daysWorkedThisMonth > 0
-      ? Math.round((totalMinutesMonth / 60 / daysWorkedThisMonth) * 100) / 100
+    const daysWorkedThisMonth = daysWithEntriesMonth.size;
+    // Average only considers completed days (days with 0 hours don't affect the average)
+    const completedDaysCount = completedDaysMonth.size;
+    const averageDailyHours = completedDaysCount > 0
+      ? Math.round((totalMinutesMonth / 60 / completedDaysCount) * 100) / 100
       : 0;
-
-    // Compare to 8h standard
-    const comparedToAverage = Math.round((averageDailyHours - 8) * 100) / 100;
 
     return {
       hoursThisWeek,
       daysWorkedThisWeek,
       daysWorkedThisMonth,
       averageDailyHours,
-      comparedToAverage,
     };
   }
+
+  /**
+   * Detects incomplete workdays (clock-in without clock-out) from previous days
+   * and creates incidents for them.
+   */
+  async detectAndProcessIncompleteWorkdays(userId: string): Promise<void> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const thirtyDaysAgo = new Date(today);
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const entries = await this.timeEntryRepository.find({
+      where: {
+        userId,
+        timestamp: Between(thirtyDaysAgo, today),
+      },
+      order: { timestamp: 'ASC' },
+    });
+    if (entries.length === 0) return;
+
+    // Detectar entradas sin salida por día
+    const entriesByDay: Record<string, TimeEntry[]> = {};
+    for (const entry of entries) {
+      const dayKey = entry.timestamp.toISOString().split('T')[0];
+      if (!entriesByDay[dayKey]) entriesByDay[dayKey] = [];
+      entriesByDay[dayKey].push(entry);
+    }
+    for (const [day, dayEntries] of Object.entries(entriesByDay)) {
+      let openEntry: TimeEntry | null = null;
+      for (const entry of dayEntries) {
+        if (entry.type === TimeEntryType.CLOCK_IN) {
+          openEntry = entry;
+        } else if (entry.type === TimeEntryType.CLOCK_OUT && openEntry) {
+          openEntry = null;
+        }
+      }
+      // Si queda una entrada abierta al final del día, crear incidencia
+      if (openEntry) {
+        const entryDate = new Date(openEntry.timestamp);
+        entryDate.setHours(0, 0, 0, 0);
+        if (entryDate.getTime() < today.getTime()) {
+          const endOfDay = this.getEndOfDayInLocalTimezone(openEntry.timestamp);
+          await this.incidentsService.createAutoExitIncident(
+            userId,
+            openEntry.id,
+            openEntry.timestamp,
+            endOfDay,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Helper to check if two dates are on the same day
+   */
+  private isSameDay(date1: Date, date2: Date): boolean {
+    return (
+      date1.getFullYear() === date2.getFullYear() &&
+      date1.getMonth() === date2.getMonth() &&
+      date1.getDate() === date2.getDate()
+    );
+  }
+
+  /**
+   * Process entries with auto-generated exits for incomplete workdays.
+   * Returns entries with virtual exits inserted for calculation purposes.
+   */
+  processEntriesWithAutoExits(entries: TimeEntry[]): (TimeEntry & { isAutoGenerated?: boolean })[] {
+    const processed: (TimeEntry & { isAutoGenerated?: boolean })[] = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      processed.push(entry);
+
+      if (entry.type === TimeEntryType.CLOCK_IN) {
+        const nextEntry = entries[i + 1];
+
+        // Check if there's no matching exit
+        const needsAutoExit = !nextEntry ||
+          nextEntry.type === TimeEntryType.CLOCK_IN ||
+          !this.isSameDay(entry.timestamp, nextEntry.timestamp);
+
+        if (needsAutoExit) {
+          const entryDate = new Date(entry.timestamp);
+          entryDate.setHours(0, 0, 0, 0);
+
+          // Only add auto-exit for past days, not for today
+          if (entryDate.getTime() < today.getTime()) {
+            const autoExit = {
+              ...entry,
+              id: `auto-${entry.id}`,
+              type: TimeEntryType.CLOCK_OUT,
+              timestamp: new Date(entry.timestamp.getFullYear(), entry.timestamp.getMonth(), entry.timestamp.getDate(), 23, 59, 59, 999),
+              isAutoGenerated: true,
+            } as TimeEntry & { isAutoGenerated?: boolean };
+
+            processed.push(autoExit);
+          }
+        }
+      }
+    }
+
+    // Re-sort by timestamp to maintain order
+    return processed.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  }
+
+  /**
+   * Gets the pending incidents count for the admin dashboard
+   */
+  async getPendingIncidentsCount(): Promise<number> {
+    return this.incidentsService.getPendingCount();
+  }
+
+  /**
+   * Creates a clock-out entry when an incident is corrected by an admin.
+   * This is used to recalculate work hours when the real exit time is provided.
+   */
+  async createClockOutForIncident(
+    userId: string,
+    timestamp: Date,
+    relatedEntryId: string,
+    notes?: string,
+  ): Promise<TimeEntry> {
+    const clockOut = new TimeEntry();
+    clockOut.userId = userId;
+    clockOut.type = TimeEntryType.CLOCK_OUT;
+    clockOut.timestamp = new Date(timestamp);
+    clockOut.status = TimeEntryStatus.APPROVED;
+    clockOut.notes = notes || 'Salida registrada por corrección de incidencia';
+    clockOut.isManual = true;
+    clockOut.modifiedBy = userId;
+
+    const savedEntry = await this.timeEntryRepository.save(clockOut);
+
+    // Registrar en auditoría
+    await this.auditService.log({
+      userId,
+      action: AuditAction.CREATE,
+      entityType: AuditEntity.TIME_ENTRY,
+      entityId: savedEntry.id,
+      newValue: savedEntry,
+      description: `Clock-out created from incident correction. Related entry: ${relatedEntryId}`,
+    });
+
+    return savedEntry;
+  }
 }
+
